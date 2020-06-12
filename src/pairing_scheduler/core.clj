@@ -107,6 +107,18 @@
                         [guest-id (individual-score guest-id context)]))
                  (into {}))))
 
+;; if a user has no preferred timeslots,
+;; update all available timeslots to preferred.
+(defn update-preferred
+  [{:keys [schedule availabilities] :as context}]
+  (->> availabilities
+       (map (fn [[key value]]
+          (if (= 0 (count (filter (fn [x] (= (x 2) :preferred)) value)))
+            [key (set (map (fn [x] [(x 0) (x 1) :preferred]) value))]
+            [key value])))
+       (into {})
+       (assoc context :availabilities)))
+
 #_(->> {:availabilities {"raf" #{[:monday 1000 :preferred]
                                  [:monday 1100 :preferred]}
                          "dh" #{[:monday 1000 :available]
@@ -114,6 +126,7 @@
                                 [:monday 1200 :available]}
                          "berk" #{[:monday 1100 :available]
                                   [:monday 1200 :available]}}}
+       update-preferred
        (generate-initial-schedule 1)
        optimize-schedule
        report

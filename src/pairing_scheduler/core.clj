@@ -3,91 +3,128 @@
    [clojure.math.combinatorics :as combo]
    [clojure.set :as set]))
 
-(defn tweak-schedule
-  [{:keys [schedule availabilities] :as context}]
-  (assoc context
-    :schedule
-    (if (empty? schedule)
-      schedule
-      ;; move one event to another time
-      (let [event-index (rand-int (count schedule))]
-        (update (vec schedule) event-index
-                (fn [event]
-                  ;; select a daytime where both guests have availability
-                  ;; (can still result in doublebooking)
-                  (let [shared-daytimes (->> (event :guest-ids)
-                                             (map availabilities)
-                                             (map (fn [availabilities]
-                                                    (set (map (fn [[day-of-week hour _]]
-                                                                [day-of-week hour]) availabilities))))
-                                             (apply set/intersection))
-                        [day-of-week time-of-day] (rand-nth (vec shared-daytimes))]
-                    (assoc event
-                      :day-of-week day-of-week
-                      :time-of-day time-of-day))))))))
+(defn overlapping-daytimes
+  [guest-ids {:keys [availabilities]}]
+  (->> guest-ids
+       (map availabilities)
+       (map (fn [availabilities]
+              (set (map (fn [[day-of-week hour _]]
+                          [day-of-week hour]) availabilities))))
+       (apply set/intersection)))
 
-(defn generate-initial-schedule
-  [times-to-pair {:keys [availabilities] :as context}]
-  (let [guest-ids (keys availabilities)
-        pairs (combo/combinations guest-ids 2)]
-    (assoc context
-      :schedule
-      (->> pairs
-           (repeat times-to-pair)
-           (apply concat)
-           (map (fn [pair]
-                  {:guest-ids (set pair)
-                   :day-of-week :monday
-                   :time-of-day 900}))))))
+(defn random-event
+  [guest-ids {:keys [availabilities] :as context}]
+  (let [possible-times (overlapping-daytimes guest-ids context)]
+    (if (seq possible-times)
+      (let [[day-of-week time-of-day] (rand-nth (vec possible-times))]
+        {:guest-ids (set guest-ids)
+         :day-of-week day-of-week
+         :time-of-day time-of-day})
+      {:guest-ids (set guest-ids)
+       :day-of-week :impossible
+       :time-of-day -1})))
+
+(defn remove-from-vec
+  [pos coll]
+  (vec (concat (subvec coll 0 pos) (subvec coll (inc pos)))))
 
 (defn individual-score
   [guest-id {:keys [schedule availabilities]}]
-  (let [guest-events (->> schedule
+  (let [max-events-per-day 2
+        guest-events (->> schedule
                           (filter (fn [event]
-                                    (contains? (event :guest-ids) guest-id))))]
-    (+
-     ;; penalize events that are double-scheduled for the guest
-     (let [daytimes (->> guest-events
-                         (map (fn [event]
-                                [(event :day-of-week) (event :time-of-day)])))
-           n (- (count daytimes)
-                (count (set daytimes)))]
-       (* 100 n))
-
-     ;; penalize events outside of guest's available times
-     (->> guest-events
-          (remove (fn [event]
-                    (or (contains? (availabilities guest-id) [(event :day-of-week) (event :time-of-day) :available])
-                        (contains? (availabilities guest-id) [(event :day-of-week) (event :time-of-day) :preferred]))))
-          count
-          (* 200))
-
-     ;; penalize events during available times slightly (to bias towards preferred times)
-     (->> guest-events
-          (filter (fn [event]
-                    (contains? (availabilities guest-id) [(event :day-of-week) (event :time-of-day) :available])))
-          count
-          (* 1)))))
+                                    (contains? (event :guest-ids) guest-id))))
+        guest-open-times  (->> (availabilities guest-id)
+                               (map (fn [[day-of-week time-of-day _]]
+                                      [day-of-week time-of-day]))
+                               set)
+        guest-event-times (->> guest-events
+                               (map (fn [event]
+                                      [(event :day-of-week) (event :time-of-day)])))]
+    (->> guest-events
+         (map (fn [event]
+                ;; using negatives for ok events, to promote more events rather than fewer
+                ;; b/c otherwise, an empty schedule would always be a perfect schedule
+                (cond
+                  ;; double-scheduled
+                  (< 1 (->> guest-event-times
+                            (filter (partial = [(event :day-of-week) (event :time-of-day)]))
+                            count))
+                  200
+                  ;; outside of any available times
+                  (not (contains? guest-open-times [(event :day-of-week) (event :time-of-day)]))
+                  100
+                  ;; above max for day
+                  (< max-events-per-day
+                     (->> guest-event-times
+                          (filter (fn [[day-of-week _]]
+                                    (= day-of-week (event :day-of-week))))
+                          count))
+                  50
+                  ;; at preferred time
+                  (contains? (availabilities guest-id) [(event :day-of-week) (event :time-of-day) :preferred])
+                  -5
+                  ;; at available time
+                  (contains? (availabilities guest-id) [(event :day-of-week) (event :time-of-day) :available])
+                  -1)))
+         (reduce +))))
 
 (defn schedule-score
   [{:keys [schedule availabilities] :as context}]
   (->> availabilities
        keys
        (map (fn [guest-id]
-               (individual-score guest-id context)))
+              ;; create a non-linearity, to prefer scheduling an event for someone with fewer events than someone with many
+              (let [guest-events (->> schedule
+                                      (filter (fn [event]
+                                                (contains? (event :guest-ids) guest-id))))
+                    other-guest-count (->> guest-events
+                                           (mapcat :guest-ids)
+                                           set
+                                           count
+                                           dec)]
+                (- (* (individual-score guest-id context)
+                      (/ (inc (count guest-events)))
+                      (Math/pow (count guest-events) 0.5))
+                   other-guest-count))))
        (reduce +)))
 
-(defn optimize-schedule
+(defn tweak-schedule
   [{:keys [schedule availabilities] :as context}]
+  (case (if (empty? schedule)
+          :create-event
+          (rand-nth [:move-event :drop-event :create-event]))
+    :create-event
+    (update context
+            :schedule
+            conj (let [guest-ids (take 2 (shuffle (keys availabilities)))]
+                   (random-event guest-ids context)))
+
+    :drop-event
+    (update context
+            :schedule
+            (fn [schedule]
+              (let [event-index (rand-int (count schedule))]
+                (remove-from-vec event-index (vec schedule)))))
+
+    :move-event
+    (update context
+            :schedule
+            (fn [schedule]
+              (let [event-index (rand-int (count schedule))]
+                (update (vec schedule) event-index
+                        (fn [event]
+                          (random-event (event :guest-ids) context))))))))
+
+(defn optimize-schedule
+  [{:keys [schedule availabilities report-fn] :as context}]
   (let [max-iterations 5000
-        max-tweaks-per-iteration 2]
+        max-tweaks-per-iteration 4]
     (loop [context context
            iteration-count 0]
-      (when (= 0 (mod iteration-count 1000))
-        (println (schedule-score context)))
-      (if (or
-           (= 0 (schedule-score context))
-           (> iteration-count max-iterations))
+      (when report-fn
+        (report-fn iteration-count (schedule-score context)))
+      (if (> iteration-count max-iterations)
         context
         (let [tweak-count (+ 1 (rand-int max-tweaks-per-iteration))
               tweak-n-times (apply comp (repeat tweak-count tweak-schedule))
@@ -97,68 +134,32 @@
             (recur alt-context (inc iteration-count))
             (recur context (inc iteration-count))))))))
 
+(defn generate-initial-schedule
+  [times-to-pair {:keys [availabilities] :as context}]
+  (let [guest-ids (keys availabilities)
+        pairs (combo/combinations guest-ids 2)]
+    (assoc context
+           :schedule
+           (->> pairs
+                (repeat times-to-pair)
+                (apply concat)
+                (map (fn [guest-ids]
+                       (random-event guest-ids context)))
+                (remove nil?)))))
+
 (defn report
   [{:keys [schedule availabilities] :as context}]
-  (assoc context
-    :score (schedule-score context)
-    :scores (->> availabilities
+   {:schedule schedule
+    :score (double (schedule-score context))
+    :guests (->> availabilities
                  keys
                  (map (fn [guest-id]
-                        [guest-id (individual-score guest-id context)]))
-                 (into {}))))
+                        [guest-id (let [guest-events (->> schedule
+                                                          (filter (fn [event]
+                                                                    (contains? (event :guest-ids) guest-id))))]
+                                    {:score (double (individual-score guest-id context))
+                                     :count (count guest-events)
+                                     :unique (count (disj (set (mapcat :guest-ids guest-events)) guest-id))})]))
+                 (into {}))})
 
-;; if a user has no preferred timeslots,
-;; update all available timeslots to preferred.
-(defn update-preferred
-  [{:keys [schedule availabilities] :as context}]
-  (->> availabilities
-       (map (fn [[key value]]
-          (if (= 0 (count (filter (fn [x] (= (x 2) :preferred)) value)))
-            [key (set (map (fn [x] [(x 0) (x 1) :preferred]) value))]
-            [key value])))
-       (into {})
-       (assoc context :availabilities)))
-
-#_(->> {:availabilities {"raf" #{[:monday 1000 :preferred]
-                                 [:monday 1100 :preferred]}
-                         "dh" #{[:monday 1000 :available]
-                                [:monday 1100 :available]
-                                [:monday 1200 :available]}
-                         "berk" #{[:monday 1100 :available]
-                                  [:monday 1200 :available]}}}
-       update-preferred
-       (generate-initial-schedule 1)
-       optimize-schedule
-       report
-       clojure.pprint/pprint)
-
-(defn -main []
-  (println "hello world"))
-
-#_(do
-    (def context
-      {:availabilities
-       {"raf" {:monday #{1300 1400 1500}
-               :tuesday #{}
-               :wednesday #{1000 1100 1200 1300 1400 1500 1600}
-               :thursday #{1000 1100 1200 1300 1400 1500 1600}
-               :friday #{1000 1100 1200 1300 1400 1500 1600}}
-        "dh" {:monday #{1300 1400 1500 1600}
-              :tuesday #{1300 1400 1500 1600}
-              :wednesday #{1300 1400 1500 1600}
-              :thursday #{1300 1400 1500 1600}
-              :friday #{1300 1400 1500 1600}}
-        "berk" {:monday #{900 1000 1100 1200 1300 1400 1500 1600}
-                :tuesday #{900 1000 1100 1200 1300 1400 1500 1600}
-                :wednesday #{900 1000 1100 1200 1300 1400 1500 1600}
-                :thursday #{900 1000 1100 1200 1300 1400 1500 1600}
-                :friday #{900 1000 1100 1200 1300 1400 1500 1600}}
-        "james" {:monday #{1200 1300 1400 1500 1600}
-                 :tuesday #{1000 1100}
-                 :wednesday #{1000 1100 1200 1300 1400 1500 1600}
-                 :thursday #{1000 1100}
-                 :friday #{1000 1100}}}})
-    (def context (generate-initial-schedule 2 context))
-    (do
-      (def context (optimize-schedule context))
-      (clojure.pprint/pprint (report context))))
+(defn -main [])

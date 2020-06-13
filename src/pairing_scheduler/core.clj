@@ -147,6 +147,21 @@
                        (random-event guest-ids context)))
                 (remove nil?)))))
 
+(defn update-available-to-preferred
+  "if the user has no preferred timeslots, change all availabile to preferred"
+  [{:keys [availabilities] :as context}]
+  (->> availabilities
+       (map (fn [[guest-id availability]]
+            (if (some #(= :preferred %) (flatten (vec availability)))
+              [guest-id availability]
+              [guest-id
+               (->> availability
+                    (map (fn [daily-availability]
+                           (assoc daily-availability 2 :preferred)))
+                    set)])))
+       (into {})
+       (assoc context :availabilities)))
+
 (defn report
   [{:keys [schedule availabilities] :as context}]
    {:schedule schedule

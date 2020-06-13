@@ -283,3 +283,50 @@
               "dh" 2
               "berk" 2}
              events-per-person)))))
+
+(deftest update-available-to-preferred
+  (testing "check case where user has all timeslots set to available."
+    (let [schedule (->> {:availabilities
+                         {"raf" #{[:monday 1000 :available]
+                                  [:tuesday 1000 :available]
+                                  [:thursday 1000 :preferred]}
+                          "dh" #{[:monday 1000 :available]
+                                 [:tuesday 1000 :available]
+                                 [:thursday 1000 :available]}
+                          "berk" #{[:monday 1000 :preferred]
+                                   [:tuesday 1000 :available]
+                                   [:thursday 1000 :available]}}})
+          result   (->> {:availabilities
+                         {"raf" #{[:monday 1000 :available]
+                                  [:tuesday 1000 :available]
+                                  [:thursday 1000 :preferred]}
+                          "dh" #{[:monday 1000 :preferred]
+                                 [:tuesday 1000 :preferred]
+                                 [:thursday 1000 :preferred]}
+                          "berk" #{[:monday 1000 :preferred]
+                                   [:tuesday 1000 :available]
+                                   [:thursday 1000 :available]}}})]
+    (is (= result (ps/update-available-to-preferred schedule)))))
+
+  (testing "check case where all users have no preferred time."
+    (let [schedule (->> {:availabilities
+                         {"raf" #{[:monday 1000 :available]
+                                  [:tuesday 1000 :available]
+                                  [:thursday 1000 :available]}
+                          "dh" #{[:monday 1000 :available]
+                                 [:tuesday 1000 :available]
+                                 [:thursday 1000 :available]}
+                          "berk" #{[:monday 1000 :available]
+                                   [:tuesday 1000 :available]
+                                   [:thursday 1000 :available]}}})
+          result   (->> {:availabilities
+                         {"raf" #{[:monday 1000 :preferred]
+                                  [:tuesday 1000 :preferred]
+                                  [:thursday 1000 :preferred]}
+                          "dh" #{[:monday 1000 :preferred]
+                                 [:tuesday 1000 :preferred]
+                                 [:thursday 1000 :preferred]}
+                          "berk" #{[:monday 1000 :preferred]
+                                   [:tuesday 1000 :preferred]
+                                   [:thursday 1000 :preferred]}}})]
+    (is (= result (ps/update-available-to-preferred schedule))))))

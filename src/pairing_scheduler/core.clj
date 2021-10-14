@@ -1,7 +1,9 @@
 (ns pairing-scheduler.core
   (:require
    [clojure.math.combinatorics :as combo]
-   [clojure.set :as set]))
+   [clojure.set :as set])
+  (:import
+   (java.time Period DayOfWeek ZonedDateTime ZoneId LocalTime LocalDate)))
 
 (defn overlapping-daytimes
   [guest-ids {:keys [availabilities]}]
@@ -29,33 +31,62 @@
   (vec (concat (subvec coll 0 pos) (subvec coll (inc pos)))))
 
 
+(defn ->zoned-date-time
+  "inst should be a java.util.Date ex. #inst \"2021-01-01T09\"
+   timezone should be a string, ex. \"America/Toronto\""
+  [inst timezone]
+  (ZonedDateTime/ofInstant (.toInstant inst) (ZoneId/of timezone)))
+
+#_(let [at #inst "2021-01-01T09"
+        tz "America/Toronto"
+        day-of-week DayOfWeek/WEDNESDAY]
+    (->zoned-date-time at tz))
+
+(defn days-over-max
+  [guest-id {:keys [timezones max-events-per-day schedule]}]
+  (let [guest-events (->> schedule
+                          (filter (fn [event]
+                                    (contains? (event :guest-ids) guest-id))))]
+   (if (and max-events-per-day (max-events-per-day guest-id))
+     (->> [DayOfWeek/MONDAY
+           DayOfWeek/TUESDAY
+           DayOfWeek/WEDNESDAY
+           DayOfWeek/THURSDAY
+           DayOfWeek/FRIDAY
+           DayOfWeek/SATURDAY
+           DayOfWeek/SUNDAY]
+          (map (fn [target-day-of-week]
+                 (< (max-events-per-day guest-id)
+                    (->> guest-events
+                         (filter (fn [event]
+                                   (= target-day-of-week
+                                      (.getDayOfWeek (->zoned-date-time (:at event) (timezones guest-id))))))
+                         count))))
+          (filter true?)
+          (count))
+     0)))
+
+#_(days-over-max "alice" {:timezones {"alice" "America/Toronto"}
+                          :max-events-per-day {"alice" 1}
+                          :schedule [{:at #inst "2021-01-01T09"
+                                      :guest-ids #{"alice" "bob"}}
+                                     {:at #inst "2021-01-01T10"
+                                      :guest-ids #{"alice" "bob"}}]})
+
+
 (defn individual-score
-  [guest-id {:keys [schedule availabilities max-events-per-day max-events-per-week topics]}]
+  [guest-id {:keys [schedule availabilities timezones max-events-per-day max-events-per-week topics] :as context}]
   (let [guest-events (->> schedule
                           (filter (fn [event]
                                     (contains? (event :guest-ids) guest-id))))
         guest-open-times  (->> (availabilities guest-id)
-                               (map (fn [[day-of-week time-of-day _]]
-                                      [day-of-week time-of-day]))
+                               (map (fn [[inst _]]
+                                      inst))
                                set)
         guest-event-times (->> guest-events
-                               (map (fn [event]
-                                      [(event :day-of-week) (event :time-of-day)])))]
+                               (map :at))]
     (+ ;; above max for day
-      (if (and max-events-per-day (max-events-per-day guest-id))
-        (->> [:monday :tuesday :wednesday :thursday :friday]
-             (map (fn [target-day-of-week]
-                    (< (max-events-per-day guest-id)
-                       (->> guest-event-times
-                            (filter (fn [[day-of-week _]]
-                                      (= day-of-week target-day-of-week)))
-                            count))))
-             (map (fn [over?]
-                    (if over?
-                      50
-                      0)))
-             (reduce +))
-        0)
+      (* 50 (days-over-max guest-id context))
 
       ;; above max for week
       (if (and max-events-per-week

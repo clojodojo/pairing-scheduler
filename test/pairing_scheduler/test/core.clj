@@ -48,6 +48,9 @@
                :at #inst "2021-01-01T10"}
               {:guest-ids #{"raf" "dh"}
                :at #inst "2021-01-01T11"}]
+             :timezones
+             {"raf" "America/Toronto"
+              "dh" "America/Toronto"}
              :max-events-per-day
              {"raf" 2
               "dh" 2}

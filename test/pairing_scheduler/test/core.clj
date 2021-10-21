@@ -387,6 +387,36 @@
                 set
                 count))))
 
+  (testing "handles timezones"
+    ;; timezones are only relevant for figuring out max-events-per-day
+    (is (= 1
+           (->> {:max-events-per-day {"alice" 1
+                                      "bob" 1}
+                 :timezones {"alice" "UTC"
+                             "bob" "UTC"}
+                 :availabilities {"alice" #{[#inst "2021-01-01T00" :available]
+                                            [#inst "2021-01-01T20" :available]}
+                                  "bob" #{[#inst "2021-01-01T00" :available]
+                                          [#inst "2021-01-01T20" :available]}}
+                 :times-to-pair 2}
+                ps/schedule
+                :schedule
+                count)))
+    (is (= 2
+           (->> {:max-events-per-day {"alice" 1
+                                      "bob" 1}
+                 :timezones {"alice" "America/Toronto"
+                             "bob" "America/Toronto"}
+                 ;; same as previous, but in Toronto, these are on seperate days!
+                 :availabilities {"alice" #{[#inst "2021-01-01T00" :available]
+                                            [#inst "2021-01-01T20" :available]}
+                                  "bob" #{[#inst "2021-01-01T00" :available]
+                                          [#inst "2021-01-01T20" :available]}}
+                 :times-to-pair 2}
+                ps/schedule
+                :schedule
+                count))))
+
   (testing "takes topics into consideration"
     (is (= 99
            (ps/individual-score

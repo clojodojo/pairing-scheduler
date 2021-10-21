@@ -14,6 +14,7 @@
          [#inst "2021-01-01T10" :preferred]}
  "DH" #{}}
 
+
 (deftest individual-score
   (testing "double-scheduling"
     (is (= 400
@@ -108,7 +109,7 @@
 
 (deftest overlapping-daytimes
   (testing "some overlap"
-    (is (= #{[#inst "2021-01-01T09"]}
+    (is (= #{#inst "2021-01-01T09"}
            (ps/overlapping-daytimes
             #{"Raf" "Berk"}
             {:availabilities
@@ -361,6 +362,9 @@
            (->> {:max-events-per-day {"alice" 1
                                       "bob" 1
                                       "cathy" 1}
+                 :timezones {"alice" "America/Toronto"
+                             "bob" "America/Toronto"
+                             "cathy" "America/Toronto"}
                  :availabilities {"alice" #{[#inst "2021-01-01T10" :available]}
                                   "bob" #{[#inst "2021-01-01T10" :available]}
                                   "cathy" #{[#inst "2021-01-01T10" :available]}}

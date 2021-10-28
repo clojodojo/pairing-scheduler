@@ -150,10 +150,11 @@
           :create-event
           (rand-nth [:move-event :drop-event :create-event]))
     :create-event
-    (update context
-            :schedule
-            conj (let [guest-ids (take 2 (shuffle (keys availabilities)))]
-                   (random-event guest-ids context)))
+    (let [guest-ids (take 2 (shuffle (keys availabilities)))
+          event (random-event guest-ids context)]
+      (if (nil? (:at event))
+       context
+       (update context :schedule conj event)))
 
     :drop-event
     (update context
@@ -200,7 +201,8 @@
                 (apply concat)
                 (map (fn [guest-ids]
                        (random-event guest-ids context)))
-                (remove nil?)))))
+                (remove (fn [event] (nil? (:at event))))))))
+
 
 (defn schedule
   [{:keys [availabilities times-to-pair] :as context}]
